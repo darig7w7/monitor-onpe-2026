@@ -184,33 +184,133 @@ def actualizar_historial(totales, participantes):
     return hist
 
 # =============================================================================
-# API ONPE
+# OBTENCIÓN DE DATOS — Playwright (webscraping headless)
+# Funciona en Streamlit Cloud aunque la ONPE bloquee requests directos
+# porque Playwright abre un Chrome real y hace las llamadas desde el browser
 # =============================================================================
-URL_P = "https://resultadosegundavuelta.onpe.gob.pe/presentacion-backend/resumen-general/participantes?idEleccion=10&tipoFiltro=eleccion"
-URL_T = "https://resultadosegundavuelta.onpe.gob.pe/presentacion-backend/resumen-general/totales?idEleccion=10&tipoFiltro=eleccion"
-HDR = {
-    "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Accept":"application/json, text/plain, */*",
-    "Accept-Language":"es-PE,es;q=0.9",
-    "Referer":"https://resultadosegundavuelta.onpe.gob.pe/",
-    "Origin":"https://resultadosegundavuelta.onpe.gob.pe",
-    "sec-fetch-dest":"empty","sec-fetch-mode":"cors","sec-fetch-site":"same-origin",
-}
+import subprocess, sys
 
-def _get(url):
+URL_BASE = "https://resultadosegundavuelta.onpe.gob.pe"
+URL_P    = f"{URL_BASE}/presentacion-backend/resumen-general/participantes?idEleccion=10&tipoFiltro=eleccion"
+URL_T    = f"{URL_BASE}/presentacion-backend/resumen-general/totales?idEleccion=10&tipoFiltro=eleccion"
+
+def _instalar_chromium():
+    """Instala el browser de Playwright si no está disponible (Streamlit Cloud)."""
     try:
-        r = requests.get(url, headers=HDR, timeout=15)
-        if r.status_code != 200: return None
-        if "text/html" in r.headers.get("content-type",""): return None
-        d = r.json()
-        return d.get("data") if d.get("success") else None
-    except: return None
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            b = p.chromium.launch(headless=True)
+            b.close()
+        return True
+    except Exception:
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                           capture_output=True, check=True)
+            if sys.platform.startswith("linux"):
+                subprocess.run([sys.executable, "-m", "playwright", "install-deps", "chromium"],
+                               capture_output=True)
+            return True
+        except Exception:
+            return False
 
 @st.cache_data(ttl=30)
-def obtener_participantes(): return _get(URL_P)
+def obtener_datos_onpe() -> dict | None:
+    """
+    Abre Chrome headless, navega a la ONPE e intercepta las respuestas JSON.
+    Fallback a requests si Playwright no está disponible.
+    """
+    # ── INTENTO 1: Playwright ────────────────────────────────────────────────
+    try:
+        from playwright.sync_api import sync_playwright
 
-@st.cache_data(ttl=30)
-def obtener_totales(): return _get(URL_T)
+        resultado = {"participantes": None, "totales": None}
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox","--disable-dev-shm-usage",
+                      "--disable-gpu","--disable-setuid-sandbox"]
+            )
+            ctx = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/125.0.0.0 Safari/537.36"
+                ),
+                locale="es-PE", timezone_id="America/Lima",
+            )
+            page = ctx.new_page()
+
+            # Interceptar respuestas XHR en tiempo real
+            def capturar(response):
+                try:
+                    if "participantes" in response.url and response.status == 200:
+                        d = response.json()
+                        if d.get("success"):
+                            resultado["participantes"] = d["data"]
+                    elif "totales" in response.url and response.status == 200:
+                        d = response.json()
+                        if d.get("success"):
+                            resultado["totales"] = d["data"]
+                except Exception:
+                    pass
+
+            page.on("response", capturar)
+            page.goto(URL_BASE, wait_until="networkidle", timeout=30000)
+
+            # Esperar hasta 10s por si las llamadas llegan tarde
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if resultado["participantes"] and resultado["totales"]:
+                    break
+                time.sleep(0.5)
+
+            # Si no llegaron por intercepción, llamar directamente desde el contexto
+            if not resultado["participantes"]:
+                r = page.request.get(URL_P)
+                if r.ok:
+                    d = r.json()
+                    if d.get("success"):
+                        resultado["participantes"] = d["data"]
+
+            if not resultado["totales"]:
+                r = page.request.get(URL_T)
+                if r.ok:
+                    d = r.json()
+                    if d.get("success"):
+                        resultado["totales"] = d["data"]
+
+            browser.close()
+
+        if resultado["participantes"] and resultado["totales"]:
+            return resultado
+
+    except Exception:
+        pass
+
+    # ── INTENTO 2: requests directo (fallback) ───────────────────────────────
+    try:
+        import requests as req
+        HDR = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "es-PE,es;q=0.9",
+            "Referer": URL_BASE + "/",
+            "Origin": URL_BASE,
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+        }
+        rp = req.get(URL_P, headers=HDR, timeout=15)
+        rt = req.get(URL_T, headers=HDR, timeout=15)
+        if rp.ok and rt.ok:
+            dp, dt = rp.json(), rt.json()
+            if dp.get("success") and dt.get("success"):
+                return {"participantes": dp["data"], "totales": dt["data"]}
+    except Exception:
+        pass
+
+    return None
 
 # =============================================================================
 # GRÁFICO DE LÍNEAS — mejorado para distinguir tendencias
@@ -491,8 +591,10 @@ def render(participantes, totales, historial):
     <div class="footer-fixed">
         <span style="font-size:0.7rem;color:#9CA3AF;font-family:'IBM Plex Mono',monospace;letter-spacing:0.08em;">
             &copy; 2026 &nbsp;
-            <strong style="color:#6B7280;letter-spacing:0.12em;">darig</strong>
-
+            <strong style="color:#6B7280;letter-spacing:0.12em;">BYDARIG</strong>
+            &nbsp;·&nbsp; Todos los derechos reservados
+            &nbsp;·&nbsp; Datos: ONPE Perú
+        </span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -500,19 +602,22 @@ def render(participantes, totales, historial):
 # MAIN
 # =============================================================================
 def main():
-    participantes = obtener_participantes()
-    totales       = obtener_totales()
+    # Instalar chromium si es la primera vez (Streamlit Cloud)
+    if "chromium_ok" not in st.session_state:
+        st.session_state["chromium_ok"] = _instalar_chromium()
 
-    if not participantes or not totales:
+    datos = obtener_datos_onpe()
+
+    if not datos:
         st.markdown("""
         <div style="margin-top:80px;text-align:center;">
-            <p style="color:#EF4444;font-size:0.9rem;font-weight:600;">Sin conexión con la API de la ONPE</p>
+            <p style="color:#EF4444;font-size:0.9rem;font-weight:600;">Sin conexión con la ONPE</p>
             <p style="color:#9CA3AF;font-size:0.75rem;font-family:'IBM Plex Mono',monospace;">Reintentando en 30 segundos...</p>
         </div>
         """, unsafe_allow_html=True)
     else:
-        historial = actualizar_historial(totales, participantes)
-        render(participantes, totales, historial)
+        historial = actualizar_historial(datos["totales"], datos["participantes"])
+        render(datos["participantes"], datos["totales"], historial)
 
     time.sleep(30)
     st.rerun()
