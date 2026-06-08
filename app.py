@@ -271,17 +271,25 @@ def _playwright_scrape() -> dict | None:
 
             if not resultado["participantes"]:
                 r = page.request.get(URL_P)
+                print(f"[PW] URL_P status={r.status} content-type={r.headers.get('content-type','?')} body={r.text()[:200]}", flush=True)
                 if r.ok:
-                    d = r.json()
-                    if d.get("success"):
-                        resultado["participantes"] = d["data"]
+                    try:
+                        d = r.json()
+                        if d.get("success"):
+                            resultado["participantes"] = d["data"]
+                    except Exception as je:
+                        print(f"[PW] JSON error participantes: {je}", flush=True)
 
             if not resultado["totales"]:
                 r = page.request.get(URL_T)
+                print(f"[PW] URL_T status={r.status} content-type={r.headers.get('content-type','?')} body={r.text()[:200]}", flush=True)
                 if r.ok:
-                    d = r.json()
-                    if d.get("success"):
-                        resultado["totales"] = d["data"]
+                    try:
+                        d = r.json()
+                        if d.get("success"):
+                            resultado["totales"] = d["data"]
+                    except Exception as je:
+                        print(f"[PW] JSON error totales: {je}", flush=True)
 
             browser.close()
 
