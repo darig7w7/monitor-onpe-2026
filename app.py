@@ -277,8 +277,12 @@ def _playwright_scrape() -> dict | None:
 
         if resultado["participantes"] and resultado["totales"]:
             return resultado
-    except Exception:
-        pass
+    except Exception as e:
+        import streamlit as _st
+        try:
+            _st.session_state["debug_error"] = f"PW error: {type(e).__name__}: {str(e)[:200]}"
+        except Exception:
+            pass
     return None
 
 
@@ -320,8 +324,11 @@ def obtener_datos_onpe() -> dict | None:
             dp, dt = rp.json(), rt.json()
             if dp.get("success") and dt.get("success"):
                 return {"participantes": dp["data"], "totales": dt["data"]}
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            st.session_state["debug_error"] = f"REQ error: {type(e).__name__}: {str(e)[:200]}"
+        except Exception:
+            pass
 
     return None
 
@@ -622,10 +629,12 @@ def main():
     datos = obtener_datos_onpe()
 
     if not datos:
-        st.markdown("""
+        error_info = st.session_state.get("debug_error", "Sin detalle")
+        st.markdown(f"""
         <div style="margin-top:80px;text-align:center;">
             <p style="color:#EF4444;font-size:0.9rem;font-weight:600;">Sin conexión con la ONPE</p>
             <p style="color:#9CA3AF;font-size:0.75rem;font-family:'IBM Plex Mono',monospace;">Reintentando en 30 segundos...</p>
+            <p style="color:#6B7280;font-size:0.65rem;font-family:'IBM Plex Mono',monospace;margin-top:8px;">{error_info}</p>
         </div>
         """, unsafe_allow_html=True)
     else:
