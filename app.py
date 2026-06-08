@@ -213,13 +213,8 @@ def _instalar_chromium():
         except Exception:
             return False
 
-@st.cache_data(ttl=30)
-def obtener_datos_onpe() -> dict | None:
-    """
-    Abre Chrome headless, navega a la ONPE e intercepta las respuestas JSON.
-    Fallback a requests si Playwright no está disponible.
-    """
-    # ── INTENTO 1: Playwright ────────────────────────────────────────────────
+def _playwright_scrape() -> dict | None:
+    """Corre Playwright en thread separado para evitar conflictos con el event loop de Streamlit."""
     try:
         from playwright.sync_api import sync_playwright
 
@@ -229,7 +224,8 @@ def obtener_datos_onpe() -> dict | None:
             browser = p.chromium.launch(
                 headless=True,
                 args=["--no-sandbox","--disable-dev-shm-usage",
-                      "--disable-gpu","--disable-setuid-sandbox"]
+                      "--disable-gpu","--disable-setuid-sandbox",
+                      "--single-process"]
             )
             ctx = browser.new_context(
                 user_agent=(
@@ -241,7 +237,6 @@ def obtener_datos_onpe() -> dict | None:
             )
             page = ctx.new_page()
 
-            # Interceptar respuestas XHR en tiempo real
             def capturar(response):
                 try:
                     if "participantes" in response.url and response.status == 200:
@@ -258,14 +253,12 @@ def obtener_datos_onpe() -> dict | None:
             page.on("response", capturar)
             page.goto(URL_BASE, wait_until="networkidle", timeout=30000)
 
-            # Esperar hasta 10s por si las llamadas llegan tarde
             deadline = time.time() + 10
             while time.time() < deadline:
                 if resultado["participantes"] and resultado["totales"]:
                     break
                 time.sleep(0.5)
 
-            # Si no llegaron por intercepción, llamar directamente desde el contexto
             if not resultado["participantes"]:
                 r = page.request.get(URL_P)
                 if r.ok:
@@ -284,11 +277,31 @@ def obtener_datos_onpe() -> dict | None:
 
         if resultado["participantes"] and resultado["totales"]:
             return resultado
-
     except Exception:
         pass
+    return None
 
-    # ── INTENTO 2: requests directo (fallback) ───────────────────────────────
+
+@st.cache_data(ttl=30)
+def obtener_datos_onpe() -> dict | None:
+    """
+    Intenta Playwright en thread separado, cae a requests como fallback.
+    """
+    import threading
+
+    # ── INTENTO 1: Playwright en thread propio ────────────────────────────────
+    resultado_pw = [None]
+    def run_pw():
+        resultado_pw[0] = _playwright_scrape()
+
+    t = threading.Thread(target=run_pw)
+    t.start()
+    t.join(timeout=45)  # máximo 45 segundos
+
+    if resultado_pw[0]:
+        return resultado_pw[0]
+
+    # ── INTENTO 2: requests directo (fallback) ────────────────────────────────
     try:
         import requests as req
         HDR = {
