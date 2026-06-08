@@ -217,6 +217,7 @@ def _playwright_scrape() -> dict | None:
     """Corre Playwright en thread separado para evitar conflictos con el event loop de Streamlit."""
     try:
         from playwright.sync_api import sync_playwright
+        print("[PW] Iniciando Playwright...", flush=True)
 
         resultado = {"participantes": None, "totales": None}
 
@@ -258,7 +259,9 @@ def _playwright_scrape() -> dict | None:
                     pass
 
             page.on("response", capturar)
+            print(f"[PW] Navegando a {URL_BASE}...", flush=True)
             page.goto(URL_BASE, wait_until="networkidle", timeout=30000)
+            print(f"[PW] Página cargada. participantes={resultado['participantes'] is not None} totales={resultado['totales'] is not None}", flush=True)
 
             deadline = time.time() + 10
             while time.time() < deadline:
@@ -285,6 +288,7 @@ def _playwright_scrape() -> dict | None:
         if resultado["participantes"] and resultado["totales"]:
             return resultado
     except Exception as e:
+        print(f"[PW] ERROR: {type(e).__name__}: {str(e)[:300]}", flush=True)
         try:
             import streamlit as _st
             _st.session_state["debug_error"] = f"PW error: {type(e).__name__}: {str(e)[:300]}"
