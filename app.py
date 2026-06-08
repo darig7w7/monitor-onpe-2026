@@ -223,9 +223,16 @@ def _playwright_scrape() -> dict | None:
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox","--disable-dev-shm-usage",
-                      "--disable-gpu","--disable-setuid-sandbox",
-                      "--single-process"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-setuid-sandbox",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--no-first-run",
+                    "--no-zygote",
+                ]
             )
             ctx = browser.new_context(
                 user_agent=(
@@ -278,11 +285,12 @@ def _playwright_scrape() -> dict | None:
         if resultado["participantes"] and resultado["totales"]:
             return resultado
     except Exception as e:
-        import streamlit as _st
         try:
-            _st.session_state["debug_error"] = f"PW error: {type(e).__name__}: {str(e)[:200]}"
+            import streamlit as _st
+            _st.session_state["debug_error"] = f"PW error: {type(e).__name__}: {str(e)[:300]}"
         except Exception:
             pass
+        return None
     return None
 
 
@@ -300,7 +308,7 @@ def obtener_datos_onpe() -> dict | None:
 
     t = threading.Thread(target=run_pw)
     t.start()
-    t.join(timeout=45)  # máximo 45 segundos
+    t.join(timeout=60)  # máximo 60 segundos
 
     if resultado_pw[0]:
         return resultado_pw[0]
